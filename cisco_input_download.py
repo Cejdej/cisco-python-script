@@ -1,62 +1,79 @@
 import paramiko
-import getpass
+import time
 import datetime
+import getpass  # Secure password input
+import os  # Used for folder creation
 
+# Read switch IPs from a file
+switch_file = "switches.txt"
 
-# Function to connect to the Cisco switch and execute a command
-def execute_command(hostname, username, password, command):
-    try:
-        # Create an SSH client instance
-        ssh = paramiko.SSHClient()
+# Get user credentials
+username = input("Enter your username: ")
+password = getpass.getpass("Enter your password: ")
+command = input("Enter the command to run on all switches: ")
 
-        # Automatically add the switch to known hosts
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+# Create "Outputs" folder if it doesn't exist
+output_folder = "Outputs"
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
 
-        # Connect to the switch using SSH
-        ssh.connect(hostname, username=username, password=password)
+# Create a timestamped output file inside "Outputs" folder
+date_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+output_filename = os.path.join(output_folder, f"Switches_Output_{date_str}.txt")
 
-        # Execute the command
-        stdin, stdout, stderr = ssh.exec_command(command)
+# Open output file
+with open(output_filename, "w") as output_file:
+    # Read switches from file
+    with open(switch_file, "r") as file:
+        switches = file.readlines()
 
-        # Fetch the output
-        output = stdout.read().decode('utf-8')
-        error = stderr.read().decode('utf-8')
+    # Loop through each switch
+    for switch in switches:
+        switch = switch.strip()  # Remove whitespace/newline
 
-        # If there is an error, set the output to the error message
-        if error:
-            output = f"Error: {error}"
+        if not switch:
+            continue  # Skip empty lines
 
-        # Get the current date and time to append to the filename
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+        try:
+            print(f"Connecting to {switch}...")
 
-        # Construct the output file name (hostname_date.txt)
-        output_file = f"{hostname}_{date_str}.txt"
+            # Initialize SSH client
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(hostname=switch, username=username, password=password, look_for_keys=False, allow_agent=False)
 
-        # Save the command output to the specified file
-        with open(output_file, 'w') as f:
-            f.write(output)
+            # Open an interactive shell session
+            shell = ssh.invoke_shell()
+            time.sleep(1)
 
-        # Close the SSH connection
-        ssh.close()
+            # Send command
+            shell.send(command + "\n")
+            time.sleep(2)  # Allow time for output
 
-    except Exception as e:
-        # If any exception occurs, write the exception to the file
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
-        output_file = f"{hostname}_{date_str}.txt"
+            # Read output
+            output = shell.recv(65535).decode("utf-8")
 
-        with open(output_file, 'w') as f:
-            f.write(f"An error occurred: {e}")
+            # Get switch hostname
+            shell.send("show run | include hostname\n")
+            time.sleep(1)
+            hostname_output = shell.recv(65535).decode("utf-8")
+            hostname = hostname_output.split()[-1] if "hostname" in hostname_output else switch
 
+            # Write to file
+            output_file.write(f"\n{'*' * 50}\n")
+            output_file.write(f"Output from {hostname} ({switch})\n")
+            output_file.write(f"{'*' * 50}\n")
+            output_file.write(output)
 
-# Main function to get user input and call the function
-if __name__ == "__main__":
-    # Get credentials and command
-    hostname = input("Enter the switch hostname or IP address: ")
-    username = input("Enter the SSH username: ")
-    password = getpass.getpass("Enter the SSH password: ")  # Use getpass for secure password input
-    command = input("Enter the command to execute (e.g., show version): ")
+            print(f"Output from {switch} saved!")
 
-    # Execute the command and save the output to the file
-    execute_command(hostname, username, password, command)
+            # Close SSH connection
+            ssh.close()
+
+        except Exception as e:
+            print(f"Failed to connect to {switch}: {e}")
+            output_file.write(f"\n{'*' * 50}\n")
+            output_file.write(f"Failed to connect to {switch}\n")
+            output_file.write(f"{'*' * 50}\n")
+
+print(f"\nAll outputs saved to {output_filename}")
